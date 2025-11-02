@@ -219,18 +219,33 @@
       'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
     ];
     async function fetchRoute(o, d){
-      const coords = `${o.lng},${o.lat};${d.lng},${d.lat}`;
-      const qsuf = '?overview=full&alternatives=false&steps=false&annotations=distance';
-      let lastErr;
-      for(const base of OSRM){
-        try {
-          const r = await fetch(base + coords + qsuf, { mode:'cors' });
-          if(!r.ok) throw new Error(`HTTP ${r.status}`);
-          const data = await r.json();
-          if(data.code!=='Ok' || !data.routes?.length) throw new Error('No route');
-          return data.routes[0];
-        } catch(e){ lastErr = e; }
+  const coords = `${o.lng},${o.lat};${d.lng},${d.lat}`;
+  // Force geometry format & keep it simple for compatibility
+  const qsuf = '?overview=full&alternatives=false&steps=false&annotations=distance&geometries=polyline';
+  let lastErr, lastPayload;
+
+  for (const base of [
+    'https://router.project-osrm.org/route/v1/driving/',
+    'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
+  ]) {
+    try {
+      const r = await fetch(base + coords + qsuf, { mode: 'cors' });
+      if (!r.ok) throw new Error(`HTTP ${r.status} from ${base}`);
+      const data = await r.json();
+      lastPayload = data;
+      if (data.code !== 'Ok' || !data.routes || !data.routes.length) {
+        throw new Error(`No route from ${base} (code=${data.code})`);
       }
+      return data.routes[0];
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  // Surface more detail in the UI
+  const msg = lastErr ? (lastErr.message || String(lastErr)) : 'Unknown error';
+  throw new Error(`Routing failed on all servers: ${msg}`);
+}
+
       throw lastErr || new Error('Routing failed on all servers');
     }
     function decodePolyline(str){ // polyline6
