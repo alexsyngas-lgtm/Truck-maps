@@ -7,11 +7,9 @@
 
   <!-- Leaflet core -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
 
   <!-- Leaflet Routing Machine (uses OSRM by default) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css">
-  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
 
   <!-- Leaflet Control Geocoder (Nominatim/Photon) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css">
@@ -123,59 +121,281 @@
   </div>
 
   <script>
-    /* -------------------- Demo domain data (swap later) -------------------- */
-    const DEMO_TRUCKS = [
-      { id:'NJW08', label:'NJW08 (Artic 3-axle, 44t, 4.30m)', type:'articulated-3', gross_t:44, height_m:4.30 },
-      { id:'KZX12', label:'KZX12 (9-axle, 53t, 4.25m)',       type:'9-axle',        gross_t:53, height_m:4.25 },
-      { id:'TRG21', label:'TRG21 (Rigid, 25t, 4.10m)',        type:'rigid',         gross_t:25, height_m:4.10 },
-    ];
-    const DEMO_BRIDGES = [
-      { name:'Bridge A', lat:-36.8485, lng:174.7633, max_t:44,  max_h:null },
-      { name:'Bridge B', lat:-36.9200, lng:174.7750, max_t:30,  max_h:null },
-      { name:'Low Overbridge C', lat:-36.8800, lng:174.7450, max_t:null, max_h:4.20 },
-    ];
-    const DEMO_OVERSIZE_CORRIDORS = [
-      [ {lat:-36.85, lng:174.70}, {lat:-36.85, lng:174.90} ],
-      [ {lat:-36.92, lng:174.70}, {lat:-36.80, lng:174.78} ],
-    ];
+  // ---------- Demo data (same as before) ----------
+  const DEMO_TRUCKS = [
+    { id:'NJW08', label:'NJW08 (Artic 3-axle, 44t, 4.30m)', type:'articulated-3', gross_t:44, height_m:4.30 },
+    { id:'KZX12', label:'KZX12 (9-axle, 53t, 4.25m)',       type:'9-axle',        gross_t:53, height_m:4.25 },
+    { id:'TRG21', label:'TRG21 (Rigid, 25t, 4.10m)',        type:'rigid',         gross_t:25, height_m:4.10 },
+  ];
+  const DEMO_BRIDGES = [
+    { name:'Bridge A', lat:-36.8485, lng:174.7633, max_t:44,  max_h:null },
+    { name:'Bridge B', lat:-36.9200, lng:174.7750, max_t:30,  max_h:null },
+    { name:'Low Overbridge C', lat:-36.8800, lng:174.7450, max_t:null, max_h:4.20 },
+  ];
+  const DEMO_OVERSIZE_CORRIDORS = [
+    [ {lat:-36.85, lng:174.70}, {lat:-36.85, lng:174.90} ],
+    [ {lat:-36.92, lng:174.70}, {lat:-36.80, lng:174.78} ],
+  ];
 
-    /* -------------------- Persistence (localStorage) -------------------- */
-    const STORAGE_KEYS = {
-      mode: 'trm_mode',               // 'basic' | 'premium'
-      basic: 'trm_basic_sel',         // { truckType, gross_t, ts }
-      premium: 'trm_premium_sel',     // { unitId }
-    };
-    const saveBasicSelection = ({truckType, gross_t}) =>
-      localStorage.setItem(STORAGE_KEYS.basic, JSON.stringify({truckType, gross_t, ts: Date.now()}));
-    const readBasicSelection = () => {
-      const raw = localStorage.getItem(STORAGE_KEYS.basic);
-      if(!raw) return null;
+  // ---------- Persistence ----------
+  const STORAGE_KEYS = { mode:'trm_mode', basic:'trm_basic_sel', premium:'trm_premium_sel' };
+  const saveBasicSelection = ({truckType, gross_t}) => localStorage.setItem(STORAGE_KEYS.basic, JSON.stringify({truckType, gross_t, ts: Date.now()}));
+  const readBasicSelection = () => {
+    const raw = localStorage.getItem(STORAGE_KEYS.basic); if(!raw) return null;
+    try { const o=JSON.parse(raw); if(Date.now()-(o.ts||0)>86400000){localStorage.removeItem(STORAGE_KEYS.basic);return null;} return o; } catch { return null; }
+  };
+  const savePremiumSelection = (unitId)=> localStorage.setItem(STORAGE_KEYS.premium, JSON.stringify({unitId}));
+  const readPremiumSelection = ()=> { const raw=localStorage.getItem(STORAGE_KEYS.premium); if(!raw) return null; try{ return JSON.parse(raw);}catch{ return null;} };
+  const saveMode = (m)=> localStorage.setItem(STORAGE_KEYS.mode, m);
+  const readMode = ()=> localStorage.getItem(STORAGE_KEYS.mode) || 'basic';
+
+  // ---------- App state ----------
+  let map, routeLine, originMarker, destMarker;
+  let currentTruck=null, mode='basic';
+  let bridgeLayer, lowLayer, osrLayer;
+  let lastRouteCoords=[];
+  let clickedPoints=[];
+
+  // ---------- Helpers ----------
+  const qs=(s,el=document)=>el.querySelector(s);
+  const qsa=(s,el=document)=>[...el.querySelectorAll(s)];
+  const setChipsActive=(container,v)=> qsa('.chip',container).forEach(ch=>ch.classList.toggle('active', ch.dataset.mode===v));
+  const updateSelectionNotice=()=>{ const ok= mode==='basic'?!!readBasicSelection():!!readPremiumSelection(); qs('#selectionNotice').style.display= ok?'none':'block'; };
+  function setMode(newMode){ mode=newMode; saveMode(mode); setChipsActive(qs('#modeChips'),mode);
+    qs('#basicFields').style.display=(mode==='basic')?'':'none';
+    qs('#premiumFields').style.display=(mode==='premium')?'':'none';
+    loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice();
+  }
+  function loadCurrentTruckFromStorage(){
+    if(mode==='basic'){
+      const sel=readBasicSelection();
+      currentTruck = sel? {type:sel.truckType, gross_t:Number(sel.gross_t||0)} : null;
+      if(sel){ qs('#truckType').value=sel.truckType||''; qs('#grossWeight').value=sel.gross_t||''; }
+    } else {
+      const sel=readPremiumSelection();
+      if(sel){
+        const t=DEMO_TRUCKS.find(x=>x.id===sel.unitId);
+        currentTruck = t? {type:t.type, gross_t:t.gross_t, height_m:t.height_m, unitId:t.id} : null;
+        if(t) qs('#truckUnit').value=t.id;
+      } else currentTruck=null;
+    }
+  }
+  function refreshStatus(){
+    const el=qs('#routeStatus');
+    if(!currentTruck){ el.innerHTML='No truck selected.'; return; }
+    const h=currentTruck.height_m?`, H=${currentTruck.height_m.toFixed(2)}m`: '';
+    el.innerHTML = mode==='basic'
+      ? `Using <b>${currentTruck.type||'—'}</b>, gross <b>${currentTruck.gross_t||'—'}t</b> (expires 24 h).`
+      : `Using unit <b>${currentTruck.unitId}</b> (<b>${currentTruck.type}</b>, ${currentTruck.gross_t}t${h}).`;
+  }
+  const haversine=(lat1,lon1,lat2,lon2)=>{ const R=6371000,toRad=d=>d*Math.PI/180; const dLat=toRad(lat2-lat1),dLon=toRad(lon2-lon1);
+    const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(a)); };
+
+  function checkRouteAgainstLimits(){
+    const out=[]; if(!currentTruck||lastRouteCoords.length===0) return out;
+    const buf=50;
+    for(const b of DEMO_BRIDGES){
+      const near=lastRouteCoords.some(([lat,lng])=>haversine(lat,lng,b.lat,b.lng)<=buf);
+      if(!near) continue;
+      if(b.max_t!=null && currentTruck.gross_t && currentTruck.gross_t>b.max_t){
+        out.push(`Weight: <span class="bad">${currentTruck.gross_t}t</span> exceeds <b>${b.name}</b> limit of <b>${b.max_t}t</b>.`);
+      }
+      if(b.max_h!=null && currentTruck.height_m && currentTruck.height_m>b.max_h){
+        out.push(`Height: <span class="bad">${currentTruck.height_m.toFixed(2)}m</span> exceeds <b>${b.name}</b> clearance of <b>${b.max_h.toFixed(2)}m</b>.`);
+      }
+    }
+    qs('#warnings').innerHTML = out.length ? out.map(w=>'• '+w).join('<br>') : '<span class="mini">No restriction warnings on demo data.</span>';
+    return out;
+  }
+
+  // ---------- Geocoding (Nominatim via Leaflet Control Geocoder lib) ----------
+  function geocode(text){
+    return new Promise((resolve,reject)=>{
+      const g = L.Control.Geocoder.nominatim({ geocodingQueryParams: { countrycodes:'nz' } }); // bias to NZ; remove if you want global
+      if(!text) return reject(new Error('Empty query'));
       try {
-        const o = JSON.parse(raw);
-        if (Date.now() - (o.ts||0) > 86400000) { localStorage.removeItem(STORAGE_KEYS.basic); return null; } // 24h
-        return o;
-      } catch { return null; }
-    };
-    const savePremiumSelection = (unitId) =>
-      localStorage.setItem(STORAGE_KEYS.premium, JSON.stringify({ unitId }));
-    const readPremiumSelection = () => {
-      const raw = localStorage.getItem(STORAGE_KEYS.premium);
-      if(!raw) return null;
-      try { return JSON.parse(raw); } catch { return null; }
-    };
-    const saveMode = (m)=> localStorage.setItem(STORAGE_KEYS.mode, m);
-    const readMode = ()=> localStorage.getItem(STORAGE_KEYS.mode) || 'basic';
+        g.geocode(text, results => results && results[0] ? resolve(results[0].center) : reject(new Error('Not found: '+text)));
+      } catch(e){ reject(e); }
+    });
+  }
 
-    /* -------------------- App state -------------------- */
-    let map, routingControl;
-    let currentTruck = null; // { type, gross_t, height_m?, unitId? }
-    let mode = 'basic';
-    let bridgeLayer, lowLayer, osrLayer;
-    let lastRouteCoords = [];
-    let clickedPoints = [];
+  // ---------- Direct OSRM routing with fallbacks ----------
+  const OSRM_ENDPOINTS = [
+    // 1) Main
+    'https://router.project-osrm.org/route/v1/driving/',
+    // 2) Fallback (OpenStreetMap.de OSRM)
+    'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
+  ];
+  async function fetchRouteLine(o, d){
+    // o,d are {lat, lng}
+    const coords = `${o.lng},${o.lat};${d.lng},${d.lat}`;
+    const suffix = '?overview=full&alternatives=false&steps=false&annotations=distance';
+    let lastErr;
+    for(const base of OSRM_ENDPOINTS){
+      try{
+        const r = await fetch(base + coords + suffix, { mode:'cors' });
+        if(!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        if(data.code!=='Ok' || !data.routes || !data.routes.length) throw new Error('No route');
+        const route = data.routes[0];
+        // decode polyline (OSRM polyline6)
+        const line = decodePolyline(route.geometry);
+        return { line, distance: route.distance, duration: route.duration };
+      }catch(e){ lastErr = e; }
+    }
+    throw lastErr || new Error('Routing failed on all endpoints');
+  }
 
-    /* -------------------- Helpers -------------------- */
-    const qs = (s, el=document)=>el.querySelector(s);
-    const qsa = (s, el=document)=>[...el.querySelectorAll(s)];
-    const setChipsActive = (container, v) =>
-      qsa('.chip', container).forEach(ch=>ch.c
+  // Polyline decoder (polyline6)
+  function decodePolyline(str){
+    let index=0, lat=0, lng=0, coordinates=[];
+    while(index<str.length){
+      let b, shift=0, result=0;
+      do { b=str.charCodeAt(index++)-63; result |= (b & 0x1f) << shift; shift+=5; } while(b>=0x20);
+      const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
+      shift=0; result=0;
+      do { b=str.charCodeAt(index++)-63; result |= (b & 0x1f) << shift; shift+=5; } while(b>=0x20);
+      const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
+      lat += deltaLat; lng += deltaLng;
+      coordinates.push([lat / 1e5, lng / 1e5]);
+    }
+    return coordinates;
+  }
+
+  // ---------- UI actions ----------
+  async function routePlot(){
+    const originTxt = qs('#origin').value.trim();
+    const destTxt   = qs('#destination').value.trim();
+    if(!originTxt || !destTxt){ alert('Enter both origin and destination.'); return; }
+    if(!currentTruck){ alert('Please select your truck first.'); return; }
+
+    qs('#routeStatus').textContent = 'Finding route…';
+    try{
+      const [o, d] = await Promise.all([geocode(originTxt), geocode(destTxt)]);
+      await drawRoute(o, d);
+    }catch(e){
+      qs('#routeStatus').innerHTML = `<span class="bad">Could not find route: ${e.message}</span>`;
+      console.error(e);
+    }
+  }
+
+  async function drawRoute(o, d){
+    // remove old
+    if(routeLine){ map.removeLayer(routeLine); routeLine=null; }
+    if(originMarker) map.removeLayer(originMarker);
+    if(destMarker) map.removeLayer(destMarker);
+
+    originMarker = L.marker([o.lat, o.lng]).addTo(map).bindPopup('Origin');
+    destMarker   = L.marker([d.lat, d.lng]).addTo(map).bindPopup('Destination');
+
+    try{
+      const { line, distance, duration } = await fetchRouteLine(o, d);
+      lastRouteCoords = line; // [ [lat,lng], ... ]
+      routeLine = L.polyline(line, { weight:6, opacity:0.9 }).addTo(map);
+      map.fitBounds(routeLine.getBounds(), { padding:[30,30] });
+      qs('#routeStatus').innerHTML = `<span class="mini">Route: <span class="ok">${(distance/1000).toFixed(1)} km</span>, ${(duration/60).toFixed(0)} min</span>`;
+      checkRouteAgainstLimits();
+    }catch(e){
+      qs('#routeStatus').innerHTML = `<span class="bad">Routing failed on all servers. Please try again.</span>`;
+      console.error(e);
+    }
+  }
+
+  function resetAll(){
+    qs('#origin').value=''; qs('#destination').value='';
+    if(routeLine){ map.removeLayer(routeLine); routeLine=null; }
+    if(originMarker){ map.removeLayer(originMarker); originMarker=null; }
+    if(destMarker){ map.removeLayer(destMarker); destMarker=null; }
+    lastRouteCoords=[]; clickedPoints=[];
+    qs('#warnings').innerHTML=''; qs('#routeStatus').innerHTML='';
+  }
+
+  // ---------- Init map & UI wiring ----------
+  function init(){
+    map = L.map('map', { zoomControl:true }).setView([-36.8485, 174.7633], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
+
+    // Add a “Test Route” button (CBD → AKL Airport)
+    const testBtn = document.createElement('button');
+    testBtn.textContent = 'Test route (CBD → AKL Airport)';
+    testBtn.className = 'ghost';
+    testBtn.onclick = async () => {
+      qs('#origin').value='Auckland CBD';
+      qs('#destination').value='Auckland Airport';
+      await routePlot();
+    };
+    const testRow = document.createElement('div');
+    testRow.className='row'; testRow.innerHTML='<label></label>'; testRow.appendChild(testBtn); qs('#ui').appendChild(testRow);
+
+    // Click map twice to set waypoints (bypasses geocoding)
+    map.on('click', async e=>{
+      clickedPoints.push({lat:e.latlng.lat, lng:e.latlng.lng});
+      if(clickedPoints.length===1){
+        qs('#routeStatus').textContent='Origin set by click. Click again to set destination.';
+      } else if(clickedPoints.length===2){
+        const [o, d] = clickedPoints; clickedPoints=[];
+        await drawRoute(o, d);
+      }
+    });
+
+    // Mode toggles
+    qsa('#modeChips .chip').forEach(ch => ch.onclick=()=>setMode(ch.dataset.mode));
+
+    // Premium list
+    const unitSelect=qs('#truckUnit');
+    if(unitSelect){
+      unitSelect.innerHTML = DEMO_TRUCKS.map(t=>`<option value="${t.id}">${t.label}</option>`).join('');
+      unitSelect.onchange = e=>{ savePremiumSelection(e.target.value); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); };
+    }
+
+    // Basic selectors
+    const onBasicChange=()=>{
+      const v=qs('#truckType').value; const w=Number(qs('#grossWeight').value||0);
+      if(v && w>0){ saveBasicSelection({truckType:v, gross_t:w}); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); }
+    };
+    qs('#truckType').onchange=onBasicChange; qs('#grossWeight').onchange=onBasicChange;
+
+    // Buttons
+    qs('#routeBtn').onclick=routePlot; qs('#resetBtn').onclick=resetAll;
+
+    // Static layers
+    renderStaticLayers();
+
+    // Restore mode/selection
+    setMode(readMode()); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice();
+
+    // Global error → UI
+    window.addEventListener('error', ev => { qs('#routeStatus').innerHTML = `<span class="bad">Script error: ${ev.message}</span>`; });
+  }
+
+  function renderStaticLayers(){
+    const bridgeIcon = L.divIcon({ html:`<div style="background:#ff9f43;width:12px;height:12px;border-radius:3px;border:1px solid #0003"></div>`, className:'', iconSize:[12,12] });
+    bridgeLayer = L.layerGroup();
+    for(const b of DEMO_BRIDGES){
+      if(b.max_t!=null){
+        L.marker([b.lat,b.lng],{icon:bridgeIcon}).bindPopup(`<b>${b.name}</b><br>Max weight: ${b.max_t} t`).addTo(bridgeLayer);
+      }
+    }
+
+    const lowIcon = L.divIcon({ html:`<div style="background:#ff6a6a;width:12px;height:12px;border-radius:3px;border:1px solid #0003"></div>`, className:'', iconSize:[12,12] });
+    lowLayer = L.layerGroup();
+    for(const b of DEMO_BRIDGES){
+      if(b.max_h!=null){
+        L.marker([b.lat,b.lng],{icon:lowIcon}).bindPopup(`<b>${b.name}</b><br>Max height: ${b.max_h.toFixed(2)} m`).addTo(lowLayer);
+      }
+    }
+
+    osrLayer = L.layerGroup();
+    for(const path of DEMO_OVERSIZE_CORRIDORS){
+      L.polyline(path.map(p=>[p.lat,p.lng]),{ color:'#4cd964', weight:4, opacity:0.85 }).addTo(osrLayer);
+    }
+
+    bridgeLayer.addTo(map); lowLayer.addTo(map); osrLayer.addTo(map);
+  }
+
+  // Boot
+  window.onload = init;
+</script>
+
+<!-- tiny style hook for warning colors -->
+<script>(function(){const s=document.createElement('style');s.textContent='.bad{color:#ff6a6a;font-weight:600}.ok{color:#4cd964;font-weight:600}';document.head.appendChild(s);}())</script>
