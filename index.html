@@ -6,11 +6,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="data:,">
 
-  <!-- Leaflet (map) -->
+  <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
 
-  <!-- Leaflet Control Geocoder (Nominatim) -->
+  <!-- Leaflet Control Geocoder (for typing addresses) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css">
   <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
 
@@ -117,13 +117,13 @@
       { id:'TRG21', label:'TRG21 (Rigid, 25t, 4.10m)',        type:'rigid',         gross_t:25, height_m:4.10 },
     ];
 
-    // Bridges (existing) + the NEW 50t demo bridge on the Mangere crossing corridor
-    // Approx position near the SH20 Mangere Bridge
+    // Bridges incl. the requested Mangere Bridge @ 50 t
+    // Coordinates target the SH20 harbour crossing (Mangere Bridge).
     const DEMO_BRIDGES = [
       { name:'Bridge A', lat:-36.8485, lng:174.7633, max_t:44,  max_h:null },
       { name:'Bridge B', lat:-36.9200, lng:174.7750, max_t:30,  max_h:null },
       { name:'Low Overbridge C', lat:-36.8800, lng:174.7450, max_t:null, max_h:4.20 },
-      { name:'Demo 50t Bridge (Mangere)', lat:-36.9505, lng:174.7905, max_t:50, max_h:null } // ← NEW
+      { name:'Mangere Bridge', lat:-36.9638, lng:174.7834, max_t:50, max_h:null } // ← NEW name & accurate coords
     ];
 
     const DEMO_OVERSIZE_CORRIDORS = [
@@ -205,25 +205,24 @@
       return out;
     }
 
-    /* ---------- Geocoding: Nominatim first, Photon fallback ---------- */
+    /* ---------- Geocoding (Nominatim → Photon fallback) ---------- */
     async function geocode(text){
       if(!text) throw new Error('Empty address');
       const pick = (arr) => {
         if(!arr || !arr.length) return null;
         const a = arr[0];
-        if (a.lat && a.lon) return { lat: parseFloat(a.lat), lng: parseFloat(a.lon) }; // Nominatim
+        if (a.lat && a.lon) return { lat: parseFloat(a.lat), lng: parseFloat(a.lon) };
         if (a.geometry && Array.isArray(a.geometry.coordinates))
-          return { lat: a.geometry.coordinates[1], lng: a.geometry.coordinates[0] }; // Photon
+          return { lat: a.geometry.coordinates[1], lng: a.geometry.coordinates[0] };
         if (a.center && a.center.lat && a.center.lng) return { lat: a.center.lat, lng: a.center.lng };
         return null;
       };
-
       try {
         const u = new URL('https://nominatim.openstreetmap.org/search');
         u.searchParams.set('format', 'jsonv2');
         u.searchParams.set('q', text);
         u.searchParams.set('limit', '1');
-        u.searchParams.set('countrycodes', 'nz'); // remove for global
+        u.searchParams.set('countrycodes', 'nz');
         u.searchParams.set('accept-language', 'en');
         const r = await fetch(u.toString(), { mode:'cors' });
         if(!r.ok) throw new Error(`Nominatim HTTP ${r.status}`);
@@ -231,7 +230,6 @@
         const pt = pick(data);
         if (pt) return pt;
       } catch(e) {}
-
       try {
         const u = new URL('https://photon.komoot.io/api/');
         u.searchParams.set('q', text);
@@ -242,11 +240,10 @@
         const pt = pick(data.features || []);
         if (pt) return pt;
       } catch(e) {}
-
       throw new Error(`Couldn't geocode: "${text}"`);
     }
 
-    /* ---------- Direct OSRM routing with fallback ---------- */
+    /* ---------- OSRM routing (with fallback server) ---------- */
     const OSRM = [
       'https://router.project-osrm.org/route/v1/driving/',
       'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
@@ -268,7 +265,6 @@
       throw new Error(`Routing failed on all servers: ${msg}`);
     }
     async function fetchRouteMulti(points){
-      // points = [{lat,lng},...], 2+ waypoints
       const coordStr = points.map(p=>`${p.lng},${p.lat}`).join(';');
       const qsuf = '?overview=full&alternatives=false&steps=false&annotations=distance&geometries=polyline';
       let lastErr;
@@ -285,7 +281,7 @@
       throw new Error(`Routing failed on all servers: ${msg}`);
     }
 
-    function decodePolyline(str){ /* polyline6 */
+    function decodePolyline(str){
       let index=0, lat=0, lng=0, coordinates=[];
       while(index<str.length){
         let b, shift=0, result=0;
@@ -300,13 +296,12 @@
       return coordinates;
     }
 
-    /* ---------- Detour helpers for the 50t demo bridge ---------- */
-    const DEMO_50T = DEMO_BRIDGES.find(b => b.name.startsWith('Demo 50t Bridge'));
-    function routePassesRestrictedBridge(lineCoords, bridge, bufferM=150){
+    /* ---------- Detour logic for Mangere Bridge (50 t) ---------- */
+    const MANGERE = DEMO_BRIDGES.find(b => b.name === 'Mangere Bridge');
+    function routePassesBridge(lineCoords, bridge, bufferM=160){
       return lineCoords.some(([lat,lng]) => haversine(lat,lng, bridge.lat, bridge.lng) <= bufferM);
     }
-    function extractSegmentNearBridge(lineCoords, bridge, bufferM=200){
-      // returns contiguous slice of points around the bridge (for red overlay)
+    function extractSegmentNearBridge(lineCoords, bridge, bufferM=220){
       const idxs = lineCoords
         .map(([lat,lng],i)=> ({i, d:haversine(lat,lng,bridge.lat,bridge.lng)}))
         .filter(o=>o.d<=bufferM)
@@ -334,7 +329,6 @@
     }
 
     async function drawRoute(o, d){
-      // clear layers
       if(routeLine){ map.removeLayer(routeLine); routeLine=null; }
       if(forbiddenOverlay){ map.removeLayer(forbiddenOverlay); forbiddenOverlay=null; }
       if(originMarker) map.removeLayer(originMarker);
@@ -344,50 +338,42 @@
       destMarker   = L.marker([d.lat,d.lng]).addTo(map).bindPopup('Destination');
 
       try {
-        // 1) get the naive (fastest) route
+        // Base (fastest) route
         const r = await fetchRoute(o,d);
         let line = decodePolyline(r.geometry);
         lastRouteCoords = line;
 
-        // 2) if overweight for the demo 50t bridge AND route crosses it → draw red “would-have” and compute detour
-        const overweight = currentTruck && currentTruck.gross_t && DEMO_50T && (currentTruck.gross_t > DEMO_50T.max_t);
-        const crosses = DEMO_50T ? routePassesRestrictedBridge(line, DEMO_50T, 150) : false;
+        const overweight = currentTruck && currentTruck.gross_t && MANGERE && (currentTruck.gross_t > MANGERE.max_t);
+        const crosses = MANGERE ? routePassesBridge(line, MANGERE, 160) : false;
 
         if (overweight && crosses) {
-          // Draw soft bold red overlay on the forbidden segment
-          const seg = extractSegmentNearBridge(line, DEMO_50T, 220);
+          // Red "would-have" overlay across Mangere Bridge
+          const seg = extractSegmentNearBridge(line, MANGERE, 240);
           if (seg.length>1) {
             forbiddenOverlay = L.polyline(seg, { weight:10, opacity:0.65, color:'#ff6a6a' }).addTo(map);
           }
 
-          // Compute a practical detour by shaping the path via two waypoints east of the harbour crossing
-          // (These points steer around the Mangere crossing for demo purposes)
-          const viaA = { lat:-36.9575, lng:174.8480 }; // East side shaping
-          const viaB = { lat:-36.9970, lng:174.8730 }; // South-east shaping
+          // Detour waypoints to avoid crossing: steer via SH1/Penrose → Manukau (no harbour crossing)
+          const viaA = { lat:-36.9140, lng:174.8320 }; // Ellerslie/Penrose area
+          const viaB = { lat:-36.9810, lng:174.8750 }; // East Manukau / Papatoetoe area
           const rd = await fetchRouteMulti([o, viaA, viaB, d]);
           const detour = decodePolyline(rd.geometry);
           lastRouteCoords = detour;
 
-          // Draw the detour as the main route (default style)
           routeLine = L.polyline(detour, { weight:6, opacity:0.9 }).addTo(map);
           map.fitBounds(routeLine.getBounds(), { padding:[30,30] });
 
           const km = (rd.distance/1000).toFixed(1);
           const min = (rd.duration/60).toFixed(0);
-          qs('#routeStatus').innerHTML = `<span class="mini">Detoured to avoid <b>${DEMO_50T.name}</b> (limit ${DEMO_50T.max_t}t). Route: <span class="ok">${km} km</span>, ${min} min</span>`;
-
-          // Also reflect in warnings panel
-          qs('#warnings').innerHTML = `• Weight: <span class="bad">${currentTruck.gross_t}t</span> exceeds <b>${DEMO_50T.name}</b> limit of <b>${DEMO_50T.max_t}t</b>. Detour applied.`;
+          qs('#routeStatus').innerHTML = `<span class="mini">Detoured to avoid <b>${MANGERE.name}</b> (limit ${MANGERE.max_t}t). Route: <span class="ok">${km} km</span>, ${min} min</span>`;
+          qs('#warnings').innerHTML = `• Weight: <span class="bad">${currentTruck.gross_t}t</span> exceeds <b>${MANGERE.name}</b> limit of <b>${MANGERE.max_t}t</b>. Detour applied.`;
         } else {
-          // Normal case: just draw the route
+          // Normal route
           routeLine = L.polyline(line, { weight:6, opacity:0.9 }).addTo(map);
           map.fitBounds(routeLine.getBounds(), { padding:[30,30] });
-
           const km = (r.distance/1000).toFixed(1);
           const min = (r.duration/60).toFixed(0);
           qs('#routeStatus').innerHTML = `<span class="mini">Route: <span class="ok">${km} km</span>, ${min} min</span>`;
-
-          // regular restriction checks (for the other demo bridges)
           checkRouteAgainstLimits();
         }
       } catch(e){
@@ -411,14 +397,12 @@
       map = L.map('map', { zoomControl:true }).setView([-36.8485, 174.7633], 11); // Auckland
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
 
-      // Add "Test Route" button
       const testBtn = document.createElement('button');
       testBtn.textContent = 'Test route (CBD → AKL Airport)';
       testBtn.className = 'ghost';
       testBtn.onclick = () => { qs('#origin').value='Auckland CBD'; qs('#destination').value='Auckland Airport'; routePlot(); };
       const row = document.createElement('div'); row.className='row'; row.innerHTML='<label></label>'; row.appendChild(testBtn); qs('#ui').appendChild(row);
 
-      // Click map twice to set waypoints (bypasses geocoding)
       map.on('click', async e=>{
         clickedPoints.push({ lat:e.latlng.lat, lng:e.latlng.lng });
         if(clickedPoints.length===1){
@@ -429,37 +413,28 @@
         }
       });
 
-      // Mode toggles
       qsa('#modeChips .chip').forEach(ch => ch.onclick=()=>setMode(ch.dataset.mode));
 
-      // Premium list
       const unitSelect=qs('#truckUnit');
       unitSelect.innerHTML = DEMO_TRUCKS.map(t=>`<option value="${t.id}">${t.label}</option>`).join('');
       unitSelect.onchange = e => { savePremiumSelection(e.target.value); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); };
 
-      // Basic selectors
       const onBasicChange = () => {
         const v = qs('#truckType').value; const w = Number(qs('#grossWeight').value||0);
         if(v && w>0){ saveBasicSelection({truckType:v, gross_t:w}); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); }
       };
       qs('#truckType').onchange = onBasicChange; qs('#grossWeight').onchange = onBasicChange;
 
-      // Buttons
       qs('#routeBtn').onclick = routePlot; qs('#resetBtn').onclick = resetAll;
 
-      // Enter key triggers routing
       ['origin','destination'].forEach(id => {
         const el = document.getElementById(id);
         el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); routePlot(); } });
       });
 
-      // Static overlay layers
       renderStaticLayers();
-
-      // Restore mode/selection
       setMode(readMode()); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice();
 
-      // Global error → UI
       window.addEventListener('error', ev => { qs('#routeStatus').innerHTML = `<span class="bad">Script error: ${ev.message}</span>`; });
     }
 
@@ -484,6 +459,8 @@
       }
       bridgeLayer.addTo(map); lowLayer.addTo(map); osrLayer.addTo(map);
     }
+
+    let clickedPoints=[];
 
     // Boot
     window.onload = init;
