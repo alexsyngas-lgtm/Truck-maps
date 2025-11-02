@@ -203,15 +203,56 @@
     }
 
     /* ---------- Geocoding (Nominatim) ---------- */
-    function geocode(text){
-      return new Promise((resolve,reject)=>{
-        const g = L.Control.Geocoder.nominatim({ geocodingQueryParams:{ countrycodes:'nz' }});
-        if(!text) return reject(new Error('Empty query'));
-        try {
-          g.geocode(text, results => results && results[0] ? resolve(results[0].center) : reject(new Error('Not found: '+text)));
-        } catch(e){ reject(e); }
-      });
+    // Geocode with Nominatim first, then Photon fallback
+async function geocode(text){
+  if(!text) throw new Error('Empty address');
+
+  // Helper: pick first result -> {lat, lng}
+  const pick = (arr) => {
+    if(!arr || !arr.length) return null;
+    const a = arr[0];
+    // Nominatim: lat/lon; Photon: geometry.coordinates [lng,lat]
+    if (a.lat && a.lon) return { lat: parseFloat(a.lat), lng: parseFloat(a.lon) };
+    if (a.geometry && Array.isArray(a.geometry.coordinates)) {
+      return { lat: a.geometry.coordinates[1], lng: a.geometry.coordinates[0] };
     }
+    if (a.center && a.center.lat && a.center.lng) return { lat: a.center.lat, lng: a.center.lng };
+    return null;
+  };
+
+  // 1) Nominatim (prefer NZ; remove countrycodes param if you want global)
+  try {
+    const u = new URL('https://nominatim.openstreetmap.org/search');
+    u.searchParams.set('format', 'jsonv2');
+    u.searchParams.set('q', text);
+    u.searchParams.set('limit', '1');
+    u.searchParams.set('countrycodes', 'nz'); // <- delete this line for global search
+    u.searchParams.set('accept-language', 'en');
+    const r = await fetch(u.toString(), { mode:'cors' });
+    if(!r.ok) throw new Error(`Nominatim HTTP ${r.status}`);
+    const data = await r.json();
+    const pt = pick(data);
+    if (pt) return pt;
+  } catch (e) {
+    // fall through to Photon
+  }
+
+  // 2) Photon (global fallback)
+  try {
+    const u = new URL('https://photon.komoot.io/api/');
+    u.searchParams.set('q', text);
+    u.searchParams.set('limit', '1');
+    const r = await fetch(u.toString(), { mode:'cors' });
+    if(!r.ok) throw new Error(`Photon HTTP ${r.status}`);
+    const data = await r.json();
+    const pt = pick(data.features || []);
+    if (pt) return pt;
+  } catch (e) {
+    // will throw below
+  }
+
+  throw new Error(`Couldn't geocode: "${text}"`);
+}
 
     /* ---------- Direct OSRM routing with fallback ---------- */
     const OSRM = [
