@@ -117,273 +117,293 @@
   </div>
 
   <script>
-    // -------- Demo data (replace with your datasets) --------
-    const DEMO_TRUCKS = [
-      { id:'NJW08', label:'NJW08 (Artic 3-axle, 44t, 4.3m)', type:'articulated-3', gross_t:44, height_m:4.3 },
-      { id:'KZX12', label:'KZX12 (9-axle, 53t, 4.25m)'     , type:'9-axle',        gross_t:53, height_m:4.25 },
-      { id:'TRG21', label:'TRG21 (Rigid, 25t, 4.1m)'       , type:'rigid',         gross_t:25, height_m:4.1 },
-    ];
-    const DEMO_BRIDGES = [
-      { name:'Bridge A', lat:-36.8485, lng:174.7633, max_t:44,  max_h:null },
-      { name:'Bridge B', lat:-36.9200, lng:174.7750, max_t:30,  max_h:null },
-      { name:'Low Overbridge C', lat:-36.8800, lng:174.7450, max_t:null, max_h:4.2 },
-    ];
-    const DEMO_OVERSIZE_CORRIDORS = [
-      [ {lat:-36.85, lng:174.70}, {lat:-36.85, lng:174.90} ],
-      [ {lat:-36.92, lng:174.70}, {lat:-36.80, lng:174.78} ],
-    ];
+  // -------- Demo data (replace with your datasets) --------
+  const DEMO_TRUCKS = [
+    { id:'NJW08', label:'NJW08 (Artic 3-axle, 44t, 4.3m)', type:'articulated-3', gross_t:44, height_m:4.3 },
+    { id:'KZX12', label:'KZX12 (9-axle, 53t, 4.25m)'     , type:'9-axle',        gross_t:53, height_m:4.25 },
+    { id:'TRG21', label:'TRG21 (Rigid, 25t, 4.1m)'       , type:'rigid',         gross_t:25, height_m:4.1 },
+  ];
+  const DEMO_BRIDGES = [
+    { name:'Bridge A', lat:-36.8485, lng:174.7633, max_t:44,  max_h:null },
+    { name:'Bridge B', lat:-36.9200, lng:174.7750, max_t:30,  max_h:null },
+    { name:'Low Overbridge C', lat:-36.8800, lng:174.7450, max_t:null, max_h:4.2 },
+  ];
+  const DEMO_OVERSIZE_CORRIDORS = [
+    [ {lat:-36.85, lng:174.70}, {lat:-36.85, lng:174.90} ],
+    [ {lat:-36.92, lng:174.70}, {lat:-36.80, lng:174.78} ],
+  ];
 
-    // -------- Persistence (localStorage) --------
-    const STORAGE_KEYS = {
-      mode: 'trm_mode',               // 'basic' | 'premium'
-      basic: 'trm_basic_sel',         // { truckType, gross_t, ts }
-      premium: 'trm_premium_sel',     // { unitId }
-    };
-    function saveBasicSelection({truckType, gross_t}) {
-      localStorage.setItem(STORAGE_KEYS.basic, JSON.stringify({truckType, gross_t, ts: Date.now()}));
-    }
-    function readBasicSelection() {
-      const raw = localStorage.getItem(STORAGE_KEYS.basic);
-      if(!raw) return null;
-      try {
-        const o = JSON.parse(raw);
-        if (Date.now() - (o.ts||0) > 86400000) { localStorage.removeItem(STORAGE_KEYS.basic); return null; } // 24h
-        return o;
-      } catch { return null; }
-    }
-    function savePremiumSelection(unitId) {
-      localStorage.setItem(STORAGE_KEYS.premium, JSON.stringify({ unitId }));
-    }
-    function readPremiumSelection() {
-      const raw = localStorage.getItem(STORAGE_KEYS.premium);
-      if(!raw) return null;
-      try { return JSON.parse(raw); } catch { return null; }
-    }
-    function saveMode(mode) { localStorage.setItem(STORAGE_KEYS.mode, mode); }
-    function readMode() { return localStorage.getItem(STORAGE_KEYS.mode) || 'basic'; }
+  // -------- Persistence (localStorage) --------
+  const STORAGE_KEYS = {
+    mode: 'trm_mode',
+    basic: 'trm_basic_sel',
+    premium: 'trm_premium_sel',
+  };
+  function saveBasicSelection({truckType, gross_t}) {
+    localStorage.setItem(STORAGE_KEYS.basic, JSON.stringify({truckType, gross_t, ts: Date.now()}));
+  }
+  function readBasicSelection() {
+    const raw = localStorage.getItem(STORAGE_KEYS.basic);
+    if(!raw) return null;
+    try {
+      const o = JSON.parse(raw);
+      if (Date.now() - (o.ts||0) > 86400000) { localStorage.removeItem(STORAGE_KEYS.basic); return null; } // 24h
+      return o;
+    } catch { return null; }
+  }
+  function savePremiumSelection(unitId) { localStorage.setItem(STORAGE_KEYS.premium, JSON.stringify({ unitId })); }
+  function readPremiumSelection() {
+    const raw = localStorage.getItem(STORAGE_KEYS.premium);
+    if(!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  function saveMode(mode) { localStorage.setItem(STORAGE_KEYS.mode, mode); }
+  function readMode() { return localStorage.getItem(STORAGE_KEYS.mode) || 'basic'; }
 
-    // -------- App state --------
-    let map, routingControl;
-    let currentTruck = null; // { type, gross_t, height_m?, unitId? }
-    let mode = 'basic';
-    let bridgeLayer, lowLayer, osrLayer;
-    let lastRouteCoords = [];
+  // -------- App state --------
+  let map, routingControl;
+  let currentTruck = null; // { type, gross_t, height_m?, unitId? }
+  let mode = 'basic';
+  let bridgeLayer, lowLayer, osrLayer;
+  let lastRouteCoords = [];
+  let clickedPoints = []; // store 0..2 clicks for quick waypoint set
 
-    // -------- Helpers --------
-    const qs = (s, el=document)=>el.querySelector(s);
-    const qsa = (s, el=document)=>[...el.querySelectorAll(s)];
-    function setChipsActive(container, v) {
-      qsa('.chip', container).forEach(ch=>ch.classList.toggle('active', ch.dataset.mode===v));
+  // -------- Helpers --------
+  const qs = (s, el=document)=>el.querySelector(s);
+  const qsa = (s, el=document)=>[...el.querySelectorAll(s)];
+  function setChipsActive(container, v) {
+    qsa('.chip', container).forEach(ch=>ch.classList.toggle('active', ch.dataset.mode===v));
+  }
+  function updateSelectionNotice() {
+    const ok = mode==='basic' ? !!readBasicSelection() : !!readPremiumSelection();
+    qs('#selectionNotice').style.display = ok ? 'none' : 'block';
+  }
+  function setMode(newMode) {
+    mode = newMode;
+    saveMode(mode);
+    setChipsActive(qs('#modeChips'), mode);
+    qs('#basicFields').style.display   = (mode==='basic') ? '' : 'none';
+    qs('#premiumFields').style.display = (mode==='premium') ? '' : 'none';
+    loadCurrentTruckFromStorage();
+    refreshStatus();
+    updateSelectionNotice();
+  }
+  function loadCurrentTruckFromStorage() {
+    if(mode==='basic') {
+      const sel = readBasicSelection();
+      currentTruck = sel ? { type: sel.truckType, gross_t: Number(sel.gross_t||0) } : null;
+      if(sel) { qs('#truckType').value = sel.truckType||''; qs('#grossWeight').value = sel.gross_t||''; }
+    } else {
+      const sel = readPremiumSelection();
+      if(sel) {
+        const t = DEMO_TRUCKS.find(x=>x.id===sel.unitId);
+        currentTruck = t ? { type:t.type, gross_t:t.gross_t, height_m:t.height_m, unitId:t.id } : null;
+        if(t) qs('#truckUnit').value = t.id;
+      } else currentTruck = null;
     }
-    function updateSelectionNotice() {
-      const ok = mode==='basic' ? !!readBasicSelection() : !!readPremiumSelection();
-      qs('#selectionNotice').style.display = ok ? 'none' : 'block';
-    }
-    function setMode(newMode) {
-      mode = newMode;
-      saveMode(mode);
-      setChipsActive(qs('#modeChips'), mode);
-      qs('#basicFields').style.display   = (mode==='basic') ? '' : 'none';
-      qs('#premiumFields').style.display = (mode==='premium') ? '' : 'none';
-      loadCurrentTruckFromStorage();
-      refreshStatus();
-      updateSelectionNotice();
-    }
-    function loadCurrentTruckFromStorage() {
-      if(mode==='basic') {
-        const sel = readBasicSelection();
-        currentTruck = sel ? { type: sel.truckType, gross_t: Number(sel.gross_t||0) } : null;
-        if(sel) { qs('#truckType').value = sel.truckType||''; qs('#grossWeight').value = sel.gross_t||''; }
-      } else {
-        const sel = readPremiumSelection();
-        if(sel) {
-          const t = DEMO_TRUCKS.find(x=>x.id===sel.unitId);
-          currentTruck = t ? { type:t.type, gross_t:t.gross_t, height_m:t.height_m, unitId:t.id } : null;
-          if(t) qs('#truckUnit').value = t.id;
-        } else currentTruck = null;
+  }
+  function refreshStatus() {
+    const el = qs('#routeStatus');
+    if(!currentTruck) { el.innerHTML = 'No truck selected.'; return; }
+    const h = currentTruck.height_m ? `, H=${currentTruck.height_m.toFixed(2)}m` : '';
+    if(mode==='basic') el.innerHTML = `Using <b>${currentTruck.type||'—'}</b>, gross <b>${currentTruck.gross_t||'—'}t</b> (expires 24 h).`;
+    else el.innerHTML = `Using unit <b>${currentTruck.unitId}</b> (<b>${currentTruck.type}</b>, ${currentTruck.gross_t}t${h}).`;
+  }
+  function haversine(lat1, lon1, lat2, lon2) {
+    const R = 6371000; const toRad = d => d*Math.PI/180;
+    const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(a));
+  }
+  function checkRouteAgainstLimits() {
+    const warnings = [];
+    if(!currentTruck || lastRouteCoords.length===0) return warnings;
+    const bufferM = 50;
+    for(const b of DEMO_BRIDGES) {
+      const near = lastRouteCoords.some(([lat, lng]) => haversine(lat, lng, b.lat, b.lng) <= bufferM);
+      if(!near) continue;
+      if(b.max_t != null && currentTruck.gross_t && currentTruck.gross_t > b.max_t) {
+        warnings.push(`Weight: <span class="bad">${currentTruck.gross_t}t</span> exceeds <b>${b.name}</b> limit of <b>${b.max_t}t</b>.`);
+      }
+      if(b.max_h != null && currentTruck.height_m && currentTruck.height_m > b.max_h) {
+        warnings.push(`Height: <span class="bad">${currentTruck.height_m.toFixed(2)}m</span> exceeds <b>${b.name}</b> clearance of <b>${b.max_h.toFixed(2)}m</b>.`);
       }
     }
-    function refreshStatus() {
-      const el = qs('#routeStatus');
-      if(!currentTruck) { el.innerHTML = 'No truck selected.'; return; }
-      const h = currentTruck.height_m ? `, H=${currentTruck.height_m.toFixed(2)}m` : '';
-      if(mode==='basic') el.innerHTML = `Using <b>${currentTruck.type||'—'}</b>, gross <b>${currentTruck.gross_t||'—'}t</b> (expires 24 h).`;
-      else el.innerHTML = `Using unit <b>${currentTruck.unitId}</b> (<b>${currentTruck.type}</b>, ${currentTruck.gross_t}t${h}).`;
-    }
+    qs('#warnings').innerHTML = warnings.length
+      ? warnings.map(w=>`• ${w}`).join('<br>')
+      : '<span class="mini">No restriction warnings on demo data.</span>';
+    return warnings;
+  }
 
-    function haversine(lat1, lon1, lat2, lon2) {
-      const R = 6371000; // m
-      const toRad = d => d * Math.PI/180;
-      const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
-      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
-      return 2*R*Math.asin(Math.sqrt(a));
-    }
-
-    function checkRouteAgainstLimits() {
-      const warnings = [];
-      if(!currentTruck || lastRouteCoords.length===0) return warnings;
-
-      // Check bridges (weight) & low overbridges (height) within ~50m buffer of the route points
-      const bufferM = 50;
-
-      for(const b of DEMO_BRIDGES) {
-        const near = lastRouteCoords.some(([lat, lng]) => haversine(lat, lng, b.lat, b.lng) <= bufferM);
-        if(!near) continue;
-
-        if(b.max_t != null && currentTruck.gross_t && currentTruck.gross_t > b.max_t) {
-          warnings.push(`Weight: <span class="bad">${currentTruck.gross_t}t</span> exceeds <b>${b.name}</b> limit of <b>${b.max_t}t</b>.`);
-        }
-        if(b.max_h != null && currentTruck.height_m && currentTruck.height_m > b.max_h) {
-          warnings.push(`Height: <span class="bad">${currentTruck.height_m.toFixed(2)}m</span> exceeds <b>${b.name}</b> clearance of <b>${b.max_h.toFixed(2)}m</b>.`);
-        }
-      }
-
-      qs('#warnings').innerHTML = warnings.length
-        ? warnings.map(w=>`• ${w}`).join('<br>')
-        : '<span class="mini">No restriction warnings on demo data.</span>';
-
-      return warnings;
-    }
-
-    function setWaypointsFromText(originText, destText) {
-      return new Promise((resolve, reject) => {
-        // Use Leaflet Control Geocoder (Nominatim) to geocode both
-        const gec = L.Control.Geocoder.nominatim();
-        const lookup = (q)=> new Promise((res, rej) => {
+  // Geocode helper (Nominatim via Leaflet Control Geocoder)
+  function setWaypointsFromText(originText, destText) {
+    return new Promise((resolve, reject) => {
+      const gec = L.Control.Geocoder.nominatim();
+      const lookup = (q)=> new Promise((res, rej) => {
+        if(!q) return rej(new Error('Empty query'));
+        try {
           gec.geocode(q, results => results && results[0] ? res(results[0]) : rej(new Error('Not found')));
-        });
-
-        Promise.all([lookup(originText), lookup(destText)])
-          .then(([o, d]) => resolve([o.center, d.center]))
-          .catch(reject);
+        } catch(e) { rej(e); }
       });
-    }
+      Promise.all([lookup(originText), lookup(destText)])
+        .then(([o, d]) => resolve([o.center, d.center]))
+        .catch(reject);
+    });
+  }
 
-    function routePlot() {
-      const origin = qs('#origin').value.trim();
-      const dest   = qs('#destination').value.trim();
-      if(!origin || !dest) { alert('Enter both origin and destination.'); return; }
-      if(!currentTruck) { alert('Please select your truck first.'); return; }
+  function routePlot() {
+    const origin = qs('#origin').value.trim();
+    const dest   = qs('#destination').value.trim();
+    if(!origin || !dest) { alert('Enter both origin and destination.'); return; }
+    if(!currentTruck) { alert('Please select your truck first.'); return; }
 
-      setWaypointsFromText(origin, dest).then(([o, d]) => {
-        routingControl.setWaypoints([ L.latLng(o.lat, o.lng), L.latLng(d.lat, d.lng) ]);
-      }).catch(() => {
-        alert('Could not geocode one of the addresses. Try being more specific.');
-      });
-    }
+    qs('#routeStatus').textContent = 'Finding route…';
+    routingControl.fire('routingstart');
 
-    function resetAll() {
-      qs('#origin').value = '';
-      qs('#destination').value = '';
-      routingControl.setWaypoints([]);
-      lastRouteCoords = [];
-      qs('#warnings').innerHTML = '';
-      qs('#routeStatus').innerHTML = '';
-    }
+    setWaypointsFromText(origin, dest).then(([o, d]) => {
+      routingControl.setWaypoints([ L.latLng(o.lat, o.lng), L.latLng(d.lat, d.lng) ]);
+    }).catch((err) => {
+      qs('#routeStatus').innerHTML = `<span class="bad">Could not geocode one of the addresses. Try being more specific.</span>`;
+      console.error('Geocode error', err);
+    });
+  }
 
-    // -------- Init map --------
-    function init() {
-      map = L.map('map', { zoomControl:true }).setView([-36.8485, 174.7633], 11); // Auckland demo
-      const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap contributors'
-      }).addTo(map);
+  function resetAll() {
+    qs('#origin').value = '';
+    qs('#destination').value = '';
+    routingControl.setWaypoints([]);
+    lastRouteCoords = [];
+    qs('#warnings').innerHTML = '';
+    qs('#routeStatus').innerHTML = '';
+    clickedPoints = [];
+  }
 
-      // Routing (OSRM demo server). Note: shared & rate-limited; good for MVP only.
-      routingControl = L.Routing.control({
-        waypoints: [],
-        router: L.Routing.osrmv1({
-          serviceUrl: 'https://router.project-osrm.org/route/v1'
-          // NOTE: motorways/highways prioritization beyond standard "car" profile
-          // requires running your own OSRM server with a custom profile.
-        }),
-        geocoder: L.Control.Geocoder.nominatim(),
-        routeWhileDragging: false,
-        addWaypoints: true,
-        draggableWaypoints: true,
-        showAlternatives: true
-      })
-      .on('routesfound', e => {
-        // capture polyline coords for restriction checks
-        const coords = e.routes[0].coordinates.map(c => [c.lat, c.lng]);
-        lastRouteCoords = coords;
-        checkRouteAgainstLimits();
-      })
-      .addTo(map);
+  // -------- Init map --------
+  function init() {
+    map = L.map('map', { zoomControl:true }).setView([-36.8485, 174.7633], 11); // Auckland demo
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
 
-      // Mode toggles
-      qsa('#modeChips .chip').forEach(ch => ch.onclick = () => setMode(ch.dataset.mode));
+    // Routing (free OSRM demo server). It can be busy or rate-limited sometimes.
+    routingControl = L.Routing.control({
+      waypoints: [],
+      router: L.Routing.osrmv1({
+        serviceUrl: 'https://router.project-osrm.org/route/v1', // HTTPS, public demo
+        profile: 'car'
+      }),
+      geocoder: L.Control.Geocoder.nominatim(),
+      routeWhileDragging: false,
+      addWaypoints: true,
+      draggableWaypoints: true,
+      showAlternatives: true
+    })
+    .on('routesfound', e => {
+      const coords = e.routes[0].coordinates.map(c => [c.lat, c.lng]);
+      lastRouteCoords = coords;
+      qs('#routeStatus').innerHTML = `<span class="ok">Route found: ${(e.routes[0].summary.totalDistance/1000).toFixed(1)} km</span>`;
+      checkRouteAgainstLimits();
+    })
+    .on('routingerror', e => {
+      // Common causes: OSRM rate limit / downtime, impossible route, network hiccup
+      qs('#routeStatus').innerHTML = `<span class="bad">Routing failed. The free OSRM server may be busy. Try again in a few seconds.</span>`;
+      console.error('Routing error', e && e.error);
+    })
+    .addTo(map);
 
-      // Premium unit list
-      const unitSelect = qs('#truckUnit');
+    // Add a tiny “test route” helper
+    const testBtn = document.createElement('button');
+    testBtn.textContent = 'Test route (CBD → AKL Airport)';
+    testBtn.className = 'ghost';
+    testBtn.onclick = () => {
+      qs('#origin').value = 'Auckland CBD';
+      qs('#destination').value = 'Auckland Airport';
+      routePlot();
+    };
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<label></label>';
+    row.appendChild(testBtn);
+    qs('.panel').appendChild(row);
+
+    // Click map to set origin/destination quickly
+    map.on('click', (e) => {
+      clickedPoints.push([e.latlng.lat, e.latlng.lng]);
+      if(clickedPoints.length === 1) {
+        qs('#routeStatus').textContent = 'Origin set (by click). Click again to set destination, or type addresses.';
+      } else if(clickedPoints.length === 2) {
+        routingControl.setWaypoints([ L.latLng(...clickedPoints[0]), L.latLng(...clickedPoints[1]) ]);
+        clickedPoints = [];
+      }
+    });
+
+    // Mode toggles
+    qsa('#modeChips .chip').forEach(ch => ch.onclick = () => setMode(ch.dataset.mode));
+
+    // Premium unit list
+    const unitSelect = qs('#truckUnit');
+    if (unitSelect) {
       unitSelect.innerHTML = DEMO_TRUCKS.map(t=>`<option value="${t.id}">${t.label}</option>`).join('');
       unitSelect.onchange = e => { savePremiumSelection(e.target.value); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); };
-
-      // Basic selectors
-      qs('#truckType').onchange = saveBasicInline;
-      qs('#grossWeight').onchange = saveBasicInline;
-      function saveBasicInline() {
-        const v = qs('#truckType').value;
-        const w = Number(qs('#grossWeight').value || 0);
-        if(v && w>0) { saveBasicSelection({truckType:v, gross_t:w}); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); }
-      }
-
-      // Buttons
-      qs('#routeBtn').onclick = routePlot;
-      qs('#resetBtn').onclick = resetAll;
-
-      // Static layers
-      renderStaticLayers();
-
-      // Restore mode/selection
-      setMode(readMode());
-      loadCurrentTruckFromStorage();
-      refreshStatus();
-      updateSelectionNotice();
     }
 
-    function renderStaticLayers() {
-      // Bridges (weight)
-      const bridgeIcon = (color)=> L.divIcon({
-        html:`<div style="background:#ff9f43;width:12px;height:12px;border-radius:3px;border:1px solid #0003"></div>`,
-        className:'', iconSize:[12,12]
-      });
-      bridgeLayer = L.layerGroup();
-      for(const b of DEMO_BRIDGES) {
-        if(b.max_t!=null) {
-          L.marker([b.lat, b.lng], { icon: bridgeIcon() })
-            .bindPopup(`<b>${b.name}</b><br>Max weight: ${b.max_t} t`)
-            .addTo(bridgeLayer);
-        }
-      }
+    // Basic selectors
+    const onBasicChange = () => {
+      const v = qs('#truckType').value;
+      const w = Number(qs('#grossWeight').value || 0);
+      if(v && w>0) { saveBasicSelection({truckType:v, gross_t:w}); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); }
+    };
+    if (qs('#truckType')) qs('#truckType').onchange = onBasicChange;
+    if (qs('#grossWeight')) qs('#grossWeight').onchange = onBasicChange;
 
-      // Low overbridges (height)
-      const lowIcon = L.divIcon({
-        html:`<div style="background:#ff6a6a;width:12px;height:12px;border-radius:3px;border:1px solid #0003"></div>`,
-        className:'', iconSize:[12,12]
-      });
-      lowLayer = L.layerGroup();
-      for(const b of DEMO_BRIDGES) {
-        if(b.max_h!=null) {
-          L.marker([b.lat, b.lng], { icon: lowIcon })
-            .bindPopup(`<b>${b.name}</b><br>Max height: ${b.max_h.toFixed(2)} m`)
-            .addTo(lowLayer);
-        }
-      }
+    // Buttons
+    if (qs('#routeBtn')) qs('#routeBtn').onclick = routePlot;
+    if (qs('#resetBtn')) qs('#resetBtn').onclick = resetAll;
 
-      // Oversize corridors
-      osrLayer = L.layerGroup();
-      for(const path of DEMO_OVERSIZE_CORRIDORS) {
-        L.polyline(path.map(p=>[p.lat,p.lng]), { color:'#4cd964', weight:4, opacity:0.8 }).addTo(osrLayer);
-      }
+    // Static layers
+    renderStaticLayers();
 
-      bridgeLayer.addTo(map);
-      lowLayer.addTo(map);
-      osrLayer.addTo(map);
+    // Restore mode/selection
+    setMode(readMode());
+    loadCurrentTruckFromStorage();
+    refreshStatus();
+    updateSelectionNotice();
+  }
+
+  function renderStaticLayers() {
+    // Bridges (weight)
+    const bridgeIcon = L.divIcon({ html:`<div style="background:#ff9f43;width:12px;height:12px;border-radius:3px;border:1px solid #0003"></div>`, className:'', iconSize:[12,12] });
+    bridgeLayer = L.layerGroup();
+    for(const b of DEMO_BRIDGES) {
+      if(b.max_t!=null) {
+        L.marker([b.lat, b.lng], { icon: bridgeIcon })
+          .bindPopup(`<b>${b.name}</b><br>Max weight: ${b.max_t} t`)
+          .addTo(bridgeLayer);
+      }
     }
 
-    // Start
-    window.onload = init;
-  </script>
+    // Low overbridges (height)
+    const lowIcon = L.divIcon({ html:`<div style="background:#ff6a6a;width:12px;height:12px;border-radius:3px;border:1px solid #0003"></div>`, className:'', iconSize:[12,12] });
+    lowLayer = L.layerGroup();
+    for(const b of DEMO_BRIDGES) {
+      if(b.max_h!=null) {
+        L.marker([b.lat, b.lng], { icon: lowIcon })
+          .bindPopup(`<b>${b.name}</b><br>Max height: ${b.max_h.toFixed(2)} m`)
+          .addTo(lowLayer);
+      }
+    }
+
+    // Oversize corridors
+    osrLayer = L.layerGroup();
+    for(const path of DEMO_OVERSIZE_CORRIDORS) {
+      L.polyline(path.map(p=>[p.lat,p.lng]), { color:'#4cd964', weight:4, opacity:0.8 }).addTo(osrLayer);
+    }
+
+    bridgeLayer.addTo(map);
+    lowLayer.addTo(map);
+    osrLayer.addTo(map);
+  }
+
+  // Start
+  window.onload = init;
+</script>
 </body>
 </html>
