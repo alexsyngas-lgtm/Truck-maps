@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
 
-  <!-- Leaflet Control Geocoder (for typing addresses) -->
+  <!-- Leaflet Control Geocoder -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css">
   <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
 
@@ -117,13 +117,12 @@
       { id:'TRG21', label:'TRG21 (Rigid, 25t, 4.10m)',        type:'rigid',         gross_t:25, height_m:4.10 },
     ];
 
-    // Bridges incl. the requested Mangere Bridge @ 50 t
-    // Coordinates target the SH20 harbour crossing (Mangere Bridge).
+    // Includes Mangere Bridge at 50 t
     const DEMO_BRIDGES = [
       { name:'Bridge A', lat:-36.8485, lng:174.7633, max_t:44,  max_h:null },
       { name:'Bridge B', lat:-36.9200, lng:174.7750, max_t:30,  max_h:null },
       { name:'Low Overbridge C', lat:-36.8800, lng:174.7450, max_t:null, max_h:4.20 },
-      { name:'Mangere Bridge', lat:-36.9638, lng:174.7834, max_t:50, max_h:null } // ← NEW name & accurate coords
+      { name:'Mangere Bridge', lat:-36.9638, lng:174.7834, max_t:50, max_h:null }
     ];
 
     const DEMO_OVERSIZE_CORRIDORS = [
@@ -205,7 +204,7 @@
       return out;
     }
 
-    /* ---------- Geocoding (Nominatim → Photon fallback) ---------- */
+    /* ---------- Geocoding (Nominatim → Photon) ---------- */
     async function geocode(text){
       if(!text) throw new Error('Empty address');
       const pick = (arr) => {
@@ -243,7 +242,7 @@
       throw new Error(`Couldn't geocode: "${text}"`);
     }
 
-    /* ---------- OSRM routing (with fallback server) ---------- */
+    /* ---------- OSRM routing ---------- */
     const OSRM = [
       'https://router.project-osrm.org/route/v1/driving/',
       'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
@@ -296,7 +295,7 @@
       return coordinates;
     }
 
-    /* ---------- Detour logic for Mangere Bridge (50 t) ---------- */
+    /* ---------- Mangere Bridge detour logic ---------- */
     const MANGERE = DEMO_BRIDGES.find(b => b.name === 'Mangere Bridge');
     function routePassesBridge(lineCoords, bridge, bufferM=160){
       return lineCoords.some(([lat,lng]) => haversine(lat,lng, bridge.lat, bridge.lng) <= bufferM);
@@ -312,7 +311,7 @@
       return lineCoords.slice(iMin, iMax+1);
     }
 
-    /* ---------- UI actions ---------- */
+    /* ---------- Actions ---------- */
     async function routePlot(){
       const originTxt = qs('#origin').value.trim();
       const destTxt   = qs('#destination').value.trim();
@@ -338,7 +337,6 @@
       destMarker   = L.marker([d.lat,d.lng]).addTo(map).bindPopup('Destination');
 
       try {
-        // Base (fastest) route
         const r = await fetchRoute(o,d);
         let line = decodePolyline(r.geometry);
         lastRouteCoords = line;
@@ -347,15 +345,13 @@
         const crosses = MANGERE ? routePassesBridge(line, MANGERE, 160) : false;
 
         if (overweight && crosses) {
-          // Red "would-have" overlay across Mangere Bridge
+          // Red "would-have" segment
           const seg = extractSegmentNearBridge(line, MANGERE, 240);
-          if (seg.length>1) {
-            forbiddenOverlay = L.polyline(seg, { weight:10, opacity:0.65, color:'#ff6a6a' }).addTo(map);
-          }
+          if (seg.length>1) forbiddenOverlay = L.polyline(seg, { weight:10, opacity:0.65, color:'#ff6a6a' }).addTo(map);
 
-          // Detour waypoints to avoid crossing: steer via SH1/Penrose → Manukau (no harbour crossing)
-          const viaA = { lat:-36.9140, lng:174.8320 }; // Ellerslie/Penrose area
-          const viaB = { lat:-36.9810, lng:174.8750 }; // East Manukau / Papatoetoe area
+          // Detour via shaping points (avoid the harbour crossing)
+          const viaA = { lat:-36.9140, lng:174.8320 };
+          const viaB = { lat:-36.9810, lng:174.8750 };
           const rd = await fetchRouteMulti([o, viaA, viaB, d]);
           const detour = decodePolyline(rd.geometry);
           lastRouteCoords = detour;
@@ -368,7 +364,6 @@
           qs('#routeStatus').innerHTML = `<span class="mini">Detoured to avoid <b>${MANGERE.name}</b> (limit ${MANGERE.max_t}t). Route: <span class="ok">${km} km</span>, ${min} min</span>`;
           qs('#warnings').innerHTML = `• Weight: <span class="bad">${currentTruck.gross_t}t</span> exceeds <b>${MANGERE.name}</b> limit of <b>${MANGERE.max_t}t</b>. Detour applied.`;
         } else {
-          // Normal route
           routeLine = L.polyline(line, { weight:6, opacity:0.9 }).addTo(map);
           map.fitBounds(routeLine.getBounds(), { padding:[30,30] });
           const km = (r.distance/1000).toFixed(1);
@@ -394,15 +389,17 @@
 
     /* ---------- Init ---------- */
     function init(){
-      map = L.map('map', { zoomControl:true }).setView([-36.8485, 174.7633], 11); // Auckland
+      map = L.map('map', { zoomControl:true }).setView([-36.8485, 174.7633], 11);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
 
+      // Test route button
       const testBtn = document.createElement('button');
       testBtn.textContent = 'Test route (CBD → AKL Airport)';
       testBtn.className = 'ghost';
       testBtn.onclick = () => { qs('#origin').value='Auckland CBD'; qs('#destination').value='Auckland Airport'; routePlot(); };
       const row = document.createElement('div'); row.className='row'; row.innerHTML='<label></label>'; row.appendChild(testBtn); qs('#ui').appendChild(row);
 
+      // Click-to-plot
       map.on('click', async e=>{
         clickedPoints.push({ lat:e.latlng.lat, lng:e.latlng.lng });
         if(clickedPoints.length===1){
@@ -413,26 +410,34 @@
         }
       });
 
+      // Mode toggles
       qsa('#modeChips .chip').forEach(ch => ch.onclick=()=>setMode(ch.dataset.mode));
 
+      // Premium list
       const unitSelect=qs('#truckUnit');
       unitSelect.innerHTML = DEMO_TRUCKS.map(t=>`<option value="${t.id}">${t.label}</option>`).join('');
       unitSelect.onchange = e => { savePremiumSelection(e.target.value); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); };
 
+      // Basic selectors
       const onBasicChange = () => {
         const v = qs('#truckType').value; const w = Number(qs('#grossWeight').value||0);
         if(v && w>0){ saveBasicSelection({truckType:v, gross_t:w}); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice(); }
       };
       qs('#truckType').onchange = onBasicChange; qs('#grossWeight').onchange = onBasicChange;
 
+      // Buttons
       qs('#routeBtn').onclick = routePlot; qs('#resetBtn').onclick = resetAll;
 
+      // Enter submits
       ['origin','destination'].forEach(id => {
         const el = document.getElementById(id);
         el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); routePlot(); } });
       });
 
+      // Static overlays
       renderStaticLayers();
+
+      // Restore
       setMode(readMode()); loadCurrentTruckFromStorage(); refreshStatus(); updateSelectionNotice();
 
       window.addEventListener('error', ev => { qs('#routeStatus').innerHTML = `<span class="bad">Script error: ${ev.message}</span>`; });
@@ -459,8 +464,6 @@
       }
       bridgeLayer.addTo(map); lowLayer.addTo(map); osrLayer.addTo(map);
     }
-
-    let clickedPoints=[];
 
     // Boot
     window.onload = init;
