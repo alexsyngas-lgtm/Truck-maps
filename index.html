@@ -2,14 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Truck Route Maps — Clean Reset</title>
+  <title>Truck Route Maps — Clean</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Silence favicon 404 -->
+  <link rel="icon" href="data:,">
 
   <!-- Leaflet (map) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
 
-  <!-- Leaflet Control Geocoder (Nominatim). Needed for typing addresses. -->
+  <!-- Leaflet Control Geocoder (Nominatim) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css">
   <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
 
@@ -21,7 +24,7 @@
     header { display:flex; gap:1rem; align-items:center; padding:.75rem 1rem; background:linear-gradient(180deg, rgba(255,255,255,.05), transparent); border-bottom:1px solid rgba(255,255,255,.08); }
     header h1 { margin:0; font-size:1rem; letter-spacing:.02em; color:var(--muted); font-weight:600; }
     .pill { padding:.35rem .6rem; border:1px solid rgba(255,255,255,.12); border-radius:999px; font-size:.8rem; color:var(--muted); }
-    #map { width:100%; height:100%; } /* <-- CRITICAL: gives the map height */
+    #map { width:100%; height:100%; } /* critical */
 
     .panel { position:absolute; top:76px; left:12px; z-index:500; background:var(--card); border:1px solid rgba(255,255,255,.12); border-radius:14px; padding:.8rem; box-shadow:0 8px 30px rgba(0,0,0,.35); width:min(460px, calc(100% - 24px)); }
     .row { display:flex; gap:.5rem; align-items:center; margin:.5rem 0; }
@@ -47,7 +50,7 @@
   <div id="app">
     <header>
       <h1>Truck Route Maps</h1>
-      <span class="pill">Leaflet · OSM · Direct OSRM · No keys</span>
+      <span class="pill">Leaflet · OSM · OSRM · No keys</span>
       <div class="mini">Click map twice to set a route, or type addresses and press Plot.</div>
     </header>
 
@@ -161,8 +164,8 @@
     function loadCurrentTruckFromStorage(){
       if(mode==='basic'){
         const sel = readBasicSelection();
-        currentTruck = sel ? { type:sel.truckType, gross_t:Number(sel.gross_t||0) } : null;
-        if(sel){ qs('#truckType').value = sel.truckType||''; qs('#grossWeight').value = sel.gross_t||''; }
+        currentTruck = sel ? { type:sel.truckType, gross_t:Number(sel.grossWeight||sel.gross_t||0) } : null;
+        if(sel){ qs('#truckType').value = sel.truckType||''; qs('#grossWeight').value = sel.gross_t||sel.grossWeight||''; }
       } else {
         const sel = readPremiumSelection();
         if(sel){
@@ -202,94 +205,81 @@
       return out;
     }
 
-    /* ---------- Geocoding (Nominatim) ---------- */
-    // Geocode with Nominatim first, then Photon fallback
-async function geocode(text){
-  if(!text) throw new Error('Empty address');
+    /* ---------- Geocoding: Nominatim first, Photon fallback ---------- */
+    async function geocode(text){
+      if(!text) throw new Error('Empty address');
 
-  // Helper: pick first result -> {lat, lng}
-  const pick = (arr) => {
-    if(!arr || !arr.length) return null;
-    const a = arr[0];
-    // Nominatim: lat/lon; Photon: geometry.coordinates [lng,lat]
-    if (a.lat && a.lon) return { lat: parseFloat(a.lat), lng: parseFloat(a.lon) };
-    if (a.geometry && Array.isArray(a.geometry.coordinates)) {
-      return { lat: a.geometry.coordinates[1], lng: a.geometry.coordinates[0] };
+      // helper to normalize
+      const pick = (arr) => {
+        if(!arr || !arr.length) return null;
+        const a = arr[0];
+        if (a.lat && a.lon) return { lat: parseFloat(a.lat), lng: parseFloat(a.lon) };              // Nominatim
+        if (a.geometry && Array.isArray(a.geometry.coordinates))                                     // Photon
+          return { lat: a.geometry.coordinates[1], lng: a.geometry.coordinates[0] };
+        if (a.center && a.center.lat && a.center.lng) return { lat: a.center.lat, lng: a.center.lng };
+        return null;
+      };
+
+      // 1) Nominatim (biased to NZ; delete countrycodes for global)
+      try {
+        const u = new URL('https://nominatim.openstreetmap.org/search');
+        u.searchParams.set('format', 'jsonv2');
+        u.searchParams.set('q', text);
+        u.searchParams.set('limit', '1');
+        u.searchParams.set('countrycodes', 'nz'); // remove for global
+        u.searchParams.set('accept-language', 'en');
+        const r = await fetch(u.toString(), { mode:'cors' });
+        if(!r.ok) throw new Error(`Nominatim HTTP ${r.status}`);
+        const data = await r.json();
+        const pt = pick(data);
+        if (pt) return pt;
+      } catch(e) { /* fall through */ }
+
+      // 2) Photon fallback
+      try {
+        const u = new URL('https://photon.komoot.io/api/');
+        u.searchParams.set('q', text);
+        u.searchParams.set('limit', '1');
+        const r = await fetch(u.toString(), { mode:'cors' });
+        if(!r.ok) throw new Error(`Photon HTTP ${r.status}`);
+        const data = await r.json();
+        const pt = pick(data.features || []);
+        if (pt) return pt;
+      } catch(e) { /* fall through */ }
+
+      throw new Error(`Couldn't geocode: "${text}"`);
     }
-    if (a.center && a.center.lat && a.center.lng) return { lat: a.center.lat, lng: a.center.lng };
-    return null;
-  };
-
-  // 1) Nominatim (prefer NZ; remove countrycodes param if you want global)
-  try {
-    const u = new URL('https://nominatim.openstreetmap.org/search');
-    u.searchParams.set('format', 'jsonv2');
-    u.searchParams.set('q', text);
-    u.searchParams.set('limit', '1');
-    u.searchParams.set('countrycodes', 'nz'); // <- delete this line for global search
-    u.searchParams.set('accept-language', 'en');
-    const r = await fetch(u.toString(), { mode:'cors' });
-    if(!r.ok) throw new Error(`Nominatim HTTP ${r.status}`);
-    const data = await r.json();
-    const pt = pick(data);
-    if (pt) return pt;
-  } catch (e) {
-    // fall through to Photon
-  }
-
-  // 2) Photon (global fallback)
-  try {
-    const u = new URL('https://photon.komoot.io/api/');
-    u.searchParams.set('q', text);
-    u.searchParams.set('limit', '1');
-    const r = await fetch(u.toString(), { mode:'cors' });
-    if(!r.ok) throw new Error(`Photon HTTP ${r.status}`);
-    const data = await r.json();
-    const pt = pick(data.features || []);
-    if (pt) return pt;
-  } catch (e) {
-    // will throw below
-  }
-
-  throw new Error(`Couldn't geocode: "${text}"`);
-}
 
     /* ---------- Direct OSRM routing with fallback ---------- */
     const OSRM = [
       'https://router.project-osrm.org/route/v1/driving/',
       'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
     ];
+
     async function fetchRoute(o, d){
-  const coords = `${o.lng},${o.lat};${d.lng},${d.lat}`;
-  // Force geometry format & keep it simple for compatibility
-  const qsuf = '?overview=full&alternatives=false&steps=false&annotations=distance&geometries=polyline';
-  let lastErr, lastPayload;
+      const coords = `${o.lng},${o.lat};${d.lng},${d.lat}`;
+      const qsuf = '?overview=full&alternatives=false&steps=false&annotations=distance&geometries=polyline';
+      let lastErr;
 
-  for (const base of [
-    'https://router.project-osrm.org/route/v1/driving/',
-    'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
-  ]) {
-    try {
-      const r = await fetch(base + coords + qsuf, { mode: 'cors' });
-      if (!r.ok) throw new Error(`HTTP ${r.status} from ${base}`);
-      const data = await r.json();
-      lastPayload = data;
-      if (data.code !== 'Ok' || !data.routes || !data.routes.length) {
-        throw new Error(`No route from ${base} (code=${data.code})`);
+      for (const base of OSRM) {
+        try {
+          const r = await fetch(base + coords + qsuf, { mode: 'cors' });
+          if (!r.ok) throw new Error(`HTTP ${r.status} from ${base}`);
+          const data = await r.json();
+          if (data.code !== 'Ok' || !data.routes || !data.routes.length) {
+            throw new Error(`No route from ${base} (code=${data.code})`);
+          }
+          return data.routes[0];
+        } catch (e) {
+          lastErr = e;
+        }
       }
-      return data.routes[0];
-    } catch (e) {
-      lastErr = e;
+      const msg = lastErr ? (lastErr.message || String(lastErr)) : 'Unknown error';
+      throw new Error(`Routing failed on all servers: ${msg}`);
     }
-  }
-  // Surface more detail in the UI
-  const msg = lastErr ? (lastErr.message || String(lastErr)) : 'Unknown error';
-  throw new Error(`Routing failed on all servers: ${msg}`);
-}
 
-      throw lastErr || new Error('Routing failed on all servers');
-    }
-    function decodePolyline(str){ // polyline6
+    // OSRM polyline decoder (polyline6)
+    function decodePolyline(str){
       let index=0, lat=0, lng=0, coordinates=[];
       while(index<str.length){
         let b, shift=0, result=0;
@@ -319,6 +309,7 @@ async function geocode(text){
         console.error(e);
       }
     }
+
     async function drawRoute(o, d){
       if(routeLine){ map.removeLayer(routeLine); routeLine=null; }
       if(originMarker) map.removeLayer(originMarker);
@@ -335,10 +326,11 @@ async function geocode(text){
         qs('#routeStatus').innerHTML = `<span class="mini">Route: <span class="ok">${(r.distance/1000).toFixed(1)} km</span>, ${(r.duration/60).toFixed(0)} min</span>`;
         checkRouteAgainstLimits();
       } catch(e){
-        qs('#routeStatus').innerHTML = `<span class="bad">Routing failed on all servers. Please try again.</span>`;
+        qs('#routeStatus').innerHTML = `<span class="bad">Routing failed: ${e.message}</span>`;
         console.error(e);
       }
     }
+
     function resetAll(){
       qs('#origin').value=''; qs('#destination').value='';
       if(routeLine){ map.removeLayer(routeLine); routeLine=null; }
@@ -388,6 +380,12 @@ async function geocode(text){
 
       // Buttons
       qs('#routeBtn').onclick = routePlot; qs('#resetBtn').onclick = resetAll;
+
+      // Enter key triggers routing
+      ['origin','destination'].forEach(id => {
+        const el = document.getElementById(id);
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); routePlot(); } });
+      });
 
       // Static overlay layers
       renderStaticLayers();
